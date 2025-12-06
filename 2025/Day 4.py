@@ -64,4 +64,4 @@ while removals:
     p2_count += removals
 
 print(f"Day 4 Problem 1: {p1_count}")  # 1460
-print(f"Day 4 Problem 2: {p2_count}")  # 1460
+print(f"Day 4 Problem 2: {p2_count}")  # 9243

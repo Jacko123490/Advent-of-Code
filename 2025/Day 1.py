@@ -10,8 +10,8 @@ __date__ = "4/12/2025 9:34 am"
 __version__ = "1.0"
 __copyright__ = __author__
 
-zeros_p1 = 0
-zeros_p2 = 0
+p1_zeros = 0
+p2_zeros = 0
 position = 50
 size = 100
 with open("inputs/d1_input.txt", "r") as file:
@@ -25,8 +25,8 @@ with open("inputs/d1_input.txt", "r") as file:
             position += direction
             position %= size
             if position == 0:
-                zeros_p2 += 1
+                p2_zeros += 1
         if position == 0:
-            zeros_p1 += 1
-print(f"D1 P1: {zeros_p1}")  # 1089
-print(f"D1 P2: {zeros_p2}")  # 6530
+            p1_zeros += 1
+print(f"D1 P1: {p1_zeros}")  # 1089
+print(f"D1 P2: {p2_zeros}")  # 6530

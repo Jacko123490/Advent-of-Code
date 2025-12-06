@@ -10,8 +10,8 @@ __date__ = "4/12/2025 9:34 am"
 __version__ = "1.0"
 __copyright__ = __author__
 
-invalid_ids1 = []
-invalid_ids2 = []
+p1_invalid_ids = []
+p2_invalid_ids = []
 with open("inputs/d2_input.txt", "r") as file:
     for line in file.readlines():
         # Generate range of IDs
@@ -25,7 +25,7 @@ with open("inputs/d2_input.txt", "r") as file:
                 # P1
                 h1, h2 = i_str[:len(i_str) // 2], i_str[len(i_str) // 2:]
                 if h1 == h2:
-                    invalid_ids1.append(i)
+                    p1_invalid_ids.append(i)
 
                 # P2
                 # loop through each possible sequence that could repeat and check if it does repeat
@@ -37,9 +37,9 @@ with open("inputs/d2_input.txt", "r") as file:
                             if substr != test_seq:  # Break early to reduce redundant checks
                                 break
                         else:
-                            invalid_ids2.append(i)
+                            p2_invalid_ids.append(i)
                             break
 
-print(invalid_ids1)
-print(f"D2 P1: {sum(invalid_ids1)}") # 15873079081
-print(f"D1 P2: {sum(invalid_ids2)}") # 22617871034
+print(p1_invalid_ids)
+print(f"D2 P1: {sum(p1_invalid_ids)}")  # 15873079081
+print(f"D1 P2: {sum(p2_invalid_ids)}")  # 22617871034

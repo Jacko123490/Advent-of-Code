@@ -22,8 +22,8 @@ def get_max_value(values: list[int], n: int) -> str:
         return str(max_val) + get_max_value(values[i+1:], n-1)
 
 
-jolt_p1 = 0
-jolt_p2 = 0
+p1_jolt = 0
+p2_jolt = 0
 with open("inputs/d3_input.txt") as file:
     for line in file.readlines():
         line = line.strip()
@@ -40,11 +40,11 @@ with open("inputs/d3_input.txt") as file:
                 (f"First digit (line[{max_batt}] = {batt[max_batt]}) is not the largest. "
                  f"Second digit is: line[{max_batt2}] = {batt[max_batt2]}")
         jolt = int(f"{batt[max_batt]}{batt[max_batt2]}")
-        jolt_p1 += jolt
+        p1_jolt += jolt
 
         # P2: Generalise to largest n digits
         jolt = int(get_max_value(batt, 12))
-        jolt_p2 += jolt
+        p2_jolt += jolt
 
-print(f"Day 3 Problem 1: {jolt_p1}")  # 17113
-print(f"Day 3 Problem 2: {jolt_p1}")  # 169709990062889
+print(f"Day 3 Problem 1: {p1_jolt}")  # 17113
+print(f"Day 3 Problem 2: {p2_jolt}")  # 169709990062889
