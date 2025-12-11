@@ -10,8 +10,9 @@ __date__ = "10/12/2025 1:30 pm"
 __version__ = "1.0"
 __copyright__ = __author__
 
-import math as m
 import itertools
+from sympy import Matrix, linsolve
+from copy import copy
 from collections.abc import Iterable, Iterator
 from functools import cache
 
@@ -93,9 +94,53 @@ def generate_test_set(buttons: list[int], joltage: list[int]) -> Iterator[tuple[
     print("Checked: ", solution_count, ", Pruned: ", max(joltage) ** len(buttons) - solution_count)
 
 
-def pruning_iterator(press: list[int], iterators: Iterable[Iterable[int]]):
-    for i in iterators[1]:
-        press
+def prune_check_test_set(buttons: list[int], joltage: list[int]) -> list[list[int]]:
+    # Collect max presses for each button to limit iteration output
+    button_max = [min([joltage[j] for j in get_button_indices(b)]) for b in buttons]
+    print("Button combinations: ", button_max)
+    results = []
+    solution_count = pruning_iterator(buttons, joltage, [0] * len(buttons), [range(value + 1) for value in button_max], results)
+    print("Checked: ", solution_count, ", Pruned: ", max(joltage) ** len(buttons) - solution_count)
+    return results
+
+
+def pruning_iterator(buttons: list[int], joltage: list[int], press: list[int], iterators: list[Iterable[int]], results: list[list[int]]) -> int:
+    checked_values = 0
+    ind = len(buttons) - len(iterators)
+    press = copy(press)
+    for i in iterators[0]:
+        press[ind] = i
+        # print(press)
+        checked_values += 1
+        match, underjolt, test = compare_joltage(buttons, press, joltage)
+        if match:
+            results.append(copy(press))
+        else:
+            if underjolt:
+                if len(iterators) > 1:
+                    checked_values += pruning_iterator(buttons, joltage, press, iterators[1:], results)
+    return checked_values
+
+
+def button_solutions(buttons: list[int], joltage: list[int]) -> list[list[int]]:
+    """Try to solve problem using linear equation systems."""
+    A = [[] for _ in range(len(joltage))]
+    for b in buttons:
+        for i, ind in enumerate(get_button_press(b, 1, len(joltage))):
+            A[i].append(ind)
+        # A.append(np.array(get_button_press(b, 1, len(joltage))).reshape((-1, 1)))
+    #  = np.concatenate(A, axis=1)
+    A = Matrix(A)
+    b = Matrix([[i] for i in joltage])
+    result_set = linsolve((A, b))
+    results = []
+    for result in result_set:
+        result = [i.subs([("tau0", -1), ("tau1", -1)]) for i in result]
+        assert press_button_jolts(buttons, result, len(joltage)) == joltage
+        temp2 = sum(result)
+        results.append(result)
+    temp = results
+    return results
 
 
 # Replaced by alternate loop with pruning
@@ -187,11 +232,14 @@ for i, (result, buttons, joltage) in enumerate(machines):
     valid_presses: list[tuple[int, ...]] = []
 
     # Iterate over each combination of button presses
-    for match, press in generate_test_set(buttons, joltage):
+    result = prune_check_test_set(buttons, joltage)
+    valid_presses_p2.append(result)
+    print("Results: ", result)
+    '''for match, press in generate_test_set(buttons, joltage):
         if match:
             valid_presses.append(press)
-    print("Results: ", valid_presses)
-    valid_presses_p2.append(valid_presses)
+    print("Results: ", valid_presses)'''
+    # valid_presses_p2.append(valid_presses)
 # print(valid_presses_p2)
 
 p2_results = []
