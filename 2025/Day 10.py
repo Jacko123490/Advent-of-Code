@@ -37,18 +37,20 @@ def press_button_lights(buttons: list[int], presses: int) -> int:
 
 
 @cache
-def get_button_press(button: int, press: int, jolt_len: int) -> list[int]:
-    out = [0] * jolt_len
+def get_button_press(button: int, out_len: int) -> list[int]:
+    """Get the power state from pressing a button."""
+    out = [0] * out_len
     for i, b in enumerate(bin(button)[::-1]):
         if b == "b":
             break
         elif b == "1":
-            out[i] = press
+            out[i] = 1
     return out
 
 
 @cache
 def get_button_indices(button: int) -> list[int]:
+    """Get indices for affected outputs from a button press."""
     ind = []
     for i, b in enumerate(bin(button)[::-1]):
         if b == "b":
@@ -58,11 +60,12 @@ def get_button_indices(button: int) -> list[int]:
     return ind
 
 
-def press_button_jolts(buttons: list[int], presses: Iterable[int], jolt_len: int) -> list[int]:
-    out = [0] * jolt_len
+def press_button_jolts(buttons: list[int], presses: Iterable[int], out_len: int) -> list[int]:
+    """Compute jolts from pressing a set of buttons different numbers of times."""
+    out = [0] * out_len
     for button, count in zip(buttons, presses):
-        for i, press in enumerate(get_button_press(button, count, jolt_len)):
-            out[i] += press
+        for i, press in enumerate(get_button_press(button, out_len)):
+            out[i] += press * count
     return out
 
 
@@ -72,15 +75,19 @@ def compare_joltage(buttons: list[int], presses: Iterable[int], expected: list[i
     :returns: (is_equal, is_underjolted)
     """
     out = press_button_jolts(buttons, presses, len(expected))
+    is_underjolt = False
     for test_i, result_i in zip(out, expected):
         if test_i > result_i:
             return False, False, out
         elif test_i < result_i:
-            return False, True, out
-    return True, False, out
+            is_underjolt = True
+    return not is_underjolt, is_underjolt, out
 
 
-def generate_test_set(buttons: list[int], joltage: list[int]) -> Iterator[tuple[bool, tuple[int, ...]]]:
+def depth_press_search(buttons: list[int], joltage: list[int]) -> Iterator[tuple[bool, tuple[int, ...]]]:
+    """Search through all possible presses depth first on each press.
+    Upper limit of each buttons search range is derived from the joltage results.
+    """
     # Collect max presses for each button to limit iteration output
     button_max = [min([joltage[j] for j in get_button_indices(b)]) for b in buttons]
     print("Button combinations: ", button_max)
@@ -94,7 +101,11 @@ def generate_test_set(buttons: list[int], joltage: list[int]) -> Iterator[tuple[
     print("Checked: ", solution_count, ", Pruned: ", max(joltage) ** len(buttons) - solution_count)
 
 
-def prune_check_test_set(buttons: list[int], joltage: list[int]) -> list[list[int]]:
+def prune_depth_press_search(buttons: list[int], joltage: list[int]) -> list[list[int]]:
+    """Search through all possible presses depth first on each press.
+    Results are pruned once a depth tree surpasses any joltage limit.
+    Upper limit of each buttons search range is derived from the joltage results.
+    """
     # Collect max presses for each button to limit iteration output
     button_max = [min([joltage[j] for j in get_button_indices(b)]) for b in buttons]
     print("Button combinations: ", button_max)
@@ -105,6 +116,9 @@ def prune_check_test_set(buttons: list[int], joltage: list[int]) -> list[list[in
 
 
 def pruning_iterator(buttons: list[int], joltage: list[int], press: list[int], iterators: list[Iterable[int]], results: list[list[int]]) -> int:
+    """Generates test presses for each combination of iterator provided for each button.
+    Invalid presses will prune generation of future presses in that chain.
+    """
     checked_values = 0
     ind = len(buttons) - len(iterators)
     press = copy(press)
@@ -126,7 +140,7 @@ def button_solutions(buttons: list[int], joltage: list[int]) -> list[list[int]]:
     """Try to solve problem using linear equation systems."""
     A = [[] for _ in range(len(joltage))]
     for b in buttons:
-        for i, ind in enumerate(get_button_press(b, 1, len(joltage))):
+        for i, ind in enumerate(get_button_press(b, len(joltage))):
             A[i].append(ind)
         # A.append(np.array(get_button_press(b, 1, len(joltage))).reshape((-1, 1)))
     #  = np.concatenate(A, axis=1)
@@ -143,47 +157,118 @@ def button_solutions(buttons: list[int], joltage: list[int]) -> list[list[int]]:
     return results
 
 
-# Replaced by alternate loop with pruning
-def test_joltage_set(start_press: tuple[int], buttons: list[int], expected: list[int]) -> list[tuple[int]]:
-    """Increment every combination of non-zero elements in the start_press and check its joltage.
-    Recursively tests each result which is underjolted and returns any matching sets.
+def breadth_press_search(start_press: list[int], press_level: int, buttons: list[int], expected: list[int]) -> tuple[list[list[int]], int]:
+    """Takes a starting press value and generates branches which increment press values for this branch.
+    To avoid re-computing the same branches, only the press values for the current level are incremented.
     """
     # Exit condition
+    # print(start_press)
+    solve_count = 1
     match, underjolt, test = compare_joltage(buttons, start_press, expected)
     if match:  # This is a valid solution, return this result and stop this branch
-        return [start_press]
+        return [start_press], solve_count
     else:
         if not underjolt:  # This branch has overshot a valid result, prune tree here
-            return []
+            return [], solve_count
         else:  # This branch has undershot the result, expand the tree from here
+            # Generate every combination of values to update for this press_level
+            # Ie. for this branch only update values i where start_press[i] = press_level
+            increment_options: list[list[int]] = []
+            for combo in itertools.product([0, 1], repeat=start_press.count(press_level)):  # generate every combination of +1 and +0 for each press value to update
+                new_press: list[int] = []
+                update_count = 0
+                for i in start_press:
+                    if i == press_level:  # Update press count
+                        new_press.append(i + combo[update_count])
+                        update_count += 1
+                    else:  # Copy press count
+                        new_press.append(i)
+                if new_press != start_press:  # Dont duplicate input
+                    increment_options.append(new_press)
 
-            # Generate every possible combination of additional presses from this start
-            increment_options = []
-            increment_count = sum((1 for i in start_press if i != 0))
-            for i in range(1, 1 << increment_count):
-                press_count = bin(i)[:1:-1]
-                for _ in range(increment_count - len(press_count)):  # Pad zeros
-                    press_count += "0"
-                ind = 0
-                new_press = []
-                for count in start_press:
-                    if count == 0:
-                        new_press.append(0)
-                    else:
-                        new_press.append(count + (1 if press_count[ind] == "1" else 0))
-                        ind += 1
-                increment_options.append(new_press)
-
-            # For each option append results from subtrees
-            valid_presses: list[tuple[int]] = []
+            # For each option, compute and append results from subtrees
+            valid_presses: list[list[int]] = []
             for press in increment_options:
-                valid_presses += test_joltage_set(press, buttons, expected)
-            return valid_presses
+                new_presses, new_count = breadth_press_search(press, press_level + 1, buttons, expected)
+                valid_presses += new_presses
+                solve_count += new_count
+            return valid_presses, solve_count
+
+
+@cache
+def part(n: int, maxsize: int, ind=1) -> list[list[int]]:
+    """Generate all partitions for integer n."""
+    result = [[n]]
+    for i in range(ind, n//2 + 1):
+        for p in part(n-i, maxsize, i):
+            value = p + [i]
+            if len(value) <= maxsize:
+                result.append(p + [i])
+    return result
+
+
+def get_permutations_for_sum(target: int, n: int) -> Iterator[tuple[int, ...]]:
+    """Computes all unique permutations of n numbers which sum to a target value."""
+    for sum_set in part(target, n):  # get partition for sum to generate all unique combinations of integers
+        if len(sum_set) <= n:  # partitions with less digits can be padded as zero values are allowed
+            sum_set = sum_set + [0] * (n - len(sum_set))
+            for combo in set(itertools.permutations(sum_set)):  # Add all permutations of this set of numbers
+                yield combo
+
+
+def prune_permutations_to_press(jolt: int, jolt_map: list[int],
+                                buttons: list[int], joltage: list[int]) -> Iterator[list[int]]:
+    """Get all the permutations of buttons which give the required joltage and prune them to remove invalid presses."""
+    for perm in get_permutations_for_sum(jolt, len(jolt_map)):
+        # Build press for this permutation
+        press = [0] * len(buttons)
+        for press_count, b_i in zip(perm, jolt_map):
+            press[b_i] = press_count
+
+        # Check if permutation overshoots joltage
+        #   When pressing buttons, some combinations may overshoot power for other outputs
+        match, underjolt, test = compare_joltage(buttons, press, joltage)
+        if match or underjolt:
+            yield press
+
+
+def compute_valid_presses(buttons: list[int], expected: list[int]) -> Iterator[list[int]]:
+    """Generate the set of valid presses such that each joltage value is satisfied individually."""
+    solution_count = 0
+    jolt_map: list[list[int]] = [[] for _ in range(len(expected))]
+    for i, b in enumerate(buttons):
+        for ind in get_button_indices(b):
+            jolt_map[ind].append(i)
+
+    # For each possible jolt output, generate a combination of buttons which matches it ('get_permutations_for_sum(jolt, len(buttons))')
+    #   Then iterate over every combination of jolt combinations and see which ones can agree on a press array
+    for press_sets in itertools.product(*[prune_permutations_to_press(jolt, button_ind, buttons, expected)
+                                          for jolt, button_ind in zip(expected, jolt_map)]):
+        # Generate net press by combining the press for each jolt combination
+        #   - Also check if press sets from each jolt combination align
+        press = [0] * len(buttons)
+        is_valid = True
+        for press_add in press_sets:
+            if not is_valid:
+                break
+            for i, press_val in enumerate(press_add):
+                if press_val:
+                    # Check for conflicting values if both are non-zero
+                    if press[i] and not (is_valid := press[i] == press_val):
+                        break
+                    press[i] = press_val
+
+        solution_count += 1
+        # print(press)
+        if is_valid:
+            print(press)
+            yield press
+    print("Checked: ", solution_count, ", Pruned: ", max(joltage) ** len(buttons) - solution_count)
 
 
 # Get data
 machines: list[tuple[int, list[int], list[int]]] = []
-with open("inputs/d10_input_ref.txt") as file:
+with open("inputs/d10_input.txt") as file:
     for line in file.readlines():
         line = line.strip()
         data = line.split()
@@ -222,25 +307,38 @@ p1_count = 0
 for results in valid_presses_p1:
     print([bin(result).count("1") for result in results])
     p1_count += min([bin(result).count("1") for result in results])
-
-print(f"Day 9 Problem 1: {p1_count}")  # 491
+print(f"Day 10 Problem 1: {p1_count}")  # 491
 
 # Collect valid presses
-valid_presses_p2: list[list[tuple[int, ...]]] = []
+valid_presses_p2: list[list[list[int]]] = []
 for i, (result, buttons, joltage) in enumerate(machines):
     print(f"[{i+1}/{len(machines)}]\tSolving joltage: {joltage} from buttons: {buttons}")
-    valid_presses: list[tuple[int, ...]] = []
+    valid_presses: list[list[int]] = []
+    for press in compute_valid_presses(buttons, joltage):
+        match, underjolt, test = compare_joltage(buttons, press, joltage)
+        if match:
+            valid_presses.append(press)
+        pass
+    valid_presses_p2.append(valid_presses)
 
+    '''solve_count: int
+    valid_presses, solve_count = breadth_press_search([0] * len(buttons), 0, buttons, joltage)
+    print("Checked: ", solve_count, ", Pruned: ", max(joltage) ** len(buttons) - solve_count)'''
+
+
+
+    '''valid_presses: list[tuple[int, ...]] = []
+    
     # Iterate over each combination of button presses
     result = prune_check_test_set(buttons, joltage)
     valid_presses_p2.append(result)
     print("Results: ", result)
-    '''for match, press in generate_test_set(buttons, joltage):
+    for match, press in generate_test_set(buttons, joltage):
         if match:
             valid_presses.append(press)
-    print("Results: ", valid_presses)'''
-    # valid_presses_p2.append(valid_presses)
-# print(valid_presses_p2)
+    print("Results: ", valid_presses)
+    valid_presses_p2.append(valid_presses)'''
+print(valid_presses_p2)
 
 p2_results = []
 for press_set in valid_presses_p2:
@@ -254,4 +352,4 @@ for press_set in valid_presses_p2:
     p2_results.append(min_sum)
     print(min_sum, min_press)
 
-print(f"Day 9 Problem 2: {sum(p2_results)}")  #
+print(f"Day 10 Problem 2: {sum(p2_results)}")  #
