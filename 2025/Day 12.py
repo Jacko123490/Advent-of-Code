@@ -12,6 +12,8 @@ __copyright__ = __author__
 
 import string
 import numpy as np
+from xcover import covers
+from numpy.typing import NDArray
 from dataclasses import dataclass
 from copy import copy, deepcopy
 from functools import cache
@@ -61,7 +63,7 @@ class Point:
     @classmethod
     def unflatten(cls, ind: int, size: tuple[int, int]) -> "Point":
         """Convert a matrix index into a Point."""
-        return Point(ind % size[0], ind // size[1])
+        return Point(ind % size[0], ind // size[0])
 
     def __str__(self):
         return f"({self.x}, {self.y})"
@@ -120,11 +122,16 @@ class Shape:
         return [p.flatten(size) for p in self.points]
 
     @classmethod
-    def unflatten(cls, ind: list[int], size: tuple[int, int]) -> "Shape":
+    def unflatten(cls, ind: Iterable[int], size: tuple[int, int]) -> "Shape":
         return Shape([Point.unflatten(i, size) for i in ind])
 
 
-# Attempt 1: Brute force all orientations
+def max_squares_in_rect(n: int, size: tuple[int, int]) -> int:
+    """Calculate how many squares of size nxn can fit in a rectangle."""
+    return (size[0] // n) * (size[1] // n)
+
+
+# Attempt 1: Brute force all orientations (far too slow at scale)
 # -----------------------------------------------------------------------------
 def available_points(size: tuple[int, int], map: set[Point]) -> Iterator[Point]:
     for x in range(size[0] - 2):
@@ -136,7 +143,7 @@ def available_points(size: tuple[int, int], map: set[Point]) -> Iterator[Point]:
 def generate_all_placements(shape: int, size: tuple[int, int], map: set[Point] = None) -> Iterator[Shape]:
     if map is None:
         map = set()
-    for flip in [None, True, False]:
+    for flip in [None, True]:  # Two flips is equivalent to a 180* rotation
         for rot in range(-1, 3):
             for p in available_points(size, map):
                 yield shapes[shape].transform(p, rot=rot, flip=flip)
@@ -164,7 +171,7 @@ def test_shape(size: tuple[int, int], shapes_left: dict[int, int], map: set[Poin
     return False, []
 
 
-# Attempt 2: Knuths Algorithm
+# Attempt 2: Knuths Algorithm (Custom implementation too slow)
 # -----------------------------------------------------------------------------
 def generate_cover_matrix(size: tuple[int, int], placement: dict[int, int]) -> np.ndarray:
     i = 0
@@ -183,14 +190,80 @@ def generate_cover_matrix(size: tuple[int, int], placement: dict[int, int]) -> n
     return np.array(rows)
 
 
-def alg_x(A: np.ndarray) -> bool:
+def retrieve_alg_x_shapes(rows: np.ndarray, size: tuple[int, int], placement: dict[int, int]) -> list[Shape]:
+    shapes = []
+    shape_count = sum(placement.values())
+    rows = rows[:, shape_count:]
+    for row in rows:
+        shapes.append(Shape.unflatten(np.argwhere(row).reshape(-1), size))
+    return shapes
+
+
+def alg_x(A: np.ndarray, required_coverage: NDArray[np.bool], row_ind: NDArray[np.int64] = None) -> tuple[bool, list[int]]:
+    if row_ind is None:
+        row_ind = np.arange(A.shape[0], dtype=int)
+
+    # If empty, valid solution found
     if A.size == 0:
-        return True
+        return True, []
 
-    # Get optimal column with minimum ones
-    col = np.count_nonzero(A, axis=0).argmin()
+    # Get optimal column with minimum ones, only consider columns which need coverage
+    col = np.count_nonzero(A[:, required_coverage], axis=0).argmin()
+    if ~np.any(A[:, col]):  # Check if column has any ones, otherwise no rows can cover solution
+        return False, []
+
+    # Select each row covering column and create/check subtree
+    for row in A[:, col].nonzero()[0]:
+        # Select row
+        selection = A[row, :]  # Select current row
+        selection_ind = row_ind[row]
+
+        # Remove columns that 'row' satisfies and other rows that conflict with 'row'
+        A_sub = A
+        required_coverage_sub = required_coverage
+        row_ind_sub = row_ind
+        # - Remove conflicting rows
+        valid_rows = ~np.any(np.logical_and(A_sub, selection), axis=1)
+        A_sub = A_sub[valid_rows]  # Select rows without any conflicts with selection
+        row_ind_sub = row_ind_sub[valid_rows]
+        # - Remove covered columns
+        A_sub = A_sub[:, ~selection]  # Remove columns covered by selection
+        required_coverage_sub = required_coverage_sub[~selection]
+
+        # Check subtree for remaining coverage
+        if A_sub.size == 0:  # End condition reached, check if final row selection covers all required columns
+            if np.all(selection[required_coverage]):  # Selection covers all required columns
+                return True, [selection_ind]
+            else:  # Selection does not fulfil coverage, but no valid rows remain to complete this
+                continue
+
+        result, rows = alg_x(A_sub, required_coverage_sub, row_ind_sub)
+        if result:
+            return True, rows + [selection_ind]
+    else:
+        return False, []
 
 
+# Attempt 3: Using xcover solver (Faster than my solver, but still too slow to solve this many problems directly)
+# -----------------------------------------------------------------------------
+def generate_xcover_options(size: tuple[int, int], placement: dict[int, int]) -> tuple[list[list[str]], list[str]]:
+    primary = []
+    options = []
+    for ind, count in placement.items():
+        for j in range(count):
+            shape_name = f"S{ind}_{j}"
+            primary.append(shape_name)
+            for shape in generate_all_placements(ind, size):
+                options.append([shape_name] + [str(ind_shape) for ind_shape in shape.flatten(size)])
+    return options, primary
+
+
+def retrieve_xcover_shapes(solution: list[list[str]], size: tuple[int, int]) -> list[Shape]:
+    shapes = []
+    for shape_inds in solution:
+        shape_inds = [int(ind) for ind in shape_inds[1:]]
+        shapes.append(Shape.unflatten(shape_inds, size))
+    return shapes
 
 
 # Debugging
@@ -220,7 +293,7 @@ def get_unique_character(ind: int) -> str:
 # Get data
 shapes: dict[int, Shape] = {}
 regions: list[tuple[tuple[int, int], dict[int, int]]] = []
-with open("inputs/d12_input_ref.txt") as file:
+with open("inputs/d12_input.txt") as file:
     is_shapes = True
     ind = 0
     j = 0
@@ -261,15 +334,65 @@ for size, placement in regions:
     print_map(size, soln_shapes)
 """
 
-# Knuth
-temp = shapes[1].transform(Point(1, 0), rot=1)
+# Modified Knuth
+"""
 results_p1 = []
 for size, placement in regions:
-    temp = generate_cover_matrix(size, placement)
-    print(temp.shape, temp)
+    # Check physical size first
+    filled_space = sum(len(shapes[ind].points) * count for ind, count in placement.items())
+    if filled_space > size[0] * size[1]:
+        print(f"Region {size} cannot fit shapes: {list(placement.values())}")
+        results_p1.append(False)
+        continue
 
-    result, soln_shapes = test_shape(size, placement)
+    A = generate_cover_matrix(size, placement)
+    # print(A.shape, A)
+
+    required_coverage = np.zeros(A.shape[1], dtype=bool)
+    required_coverage[np.arange(sum(placement.values()), dtype=int)] = True  # Specify required coverage for all shape indices
+    result, solution_rows = alg_x(A, required_coverage)
+
+    if result:
+        print(f"Arrangement found for region {size} placing shapes: {list(placement.values())}")
+        soln_shapes = retrieve_shapes(A[solution_rows], size, placement)
+        print_map(size, soln_shapes)
+    else:
+        print(f"No arrangement found for region {size} placing shapes: {list(placement.values())}")
     results_p1.append(result)
-    print_map(size, soln_shapes)
+"""
+
+# xcover
+results_p1 = []
+for i, (size, placement) in enumerate(regions):
+    package_count = sum(placement.values())
+    print(f"[{i}/{len(regions)}]\tChecking region {size} placing shapes: {list(placement.values())} ({package_count} total)")
+
+    # Check total package space
+    filled_space = sum(len(shapes[ind].points) * count for ind, count in placement.items())
+    if filled_space > size[0] * size[1]:
+        print(f"Shapes cannot fit in region.")
+        results_p1.append(False)
+        continue
+
+    # Check simple square packing
+    square_count = max_squares_in_rect(3, size)
+    print(f"Can fit ({square_count}) squares")
+    if package_count <= square_count:
+        print(f"Shapes pack discretely in region.")
+        results_p1.append(True)
+        continue
+
+    # Solve Packing
+    options, primary = generate_xcover_options(size, placement)
+    solution = next(covers(options, primary=primary), None)
+
+    if solution:
+        print(f"Arrangement found:")
+        soln_shapes = retrieve_xcover_shapes([option for i, option in enumerate(options) if i in solution], size)
+        print_map(size, soln_shapes)
+        results_p1.append(True)
+    else:
+        print(f"No arrangement found.")
+        results_p1.append(False)
 
 print(f"Day 12 Problem 1: {results_p1.count(True)}")  #
