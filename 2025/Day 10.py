@@ -11,12 +11,16 @@ __version__ = "1.0"
 __copyright__ = __author__
 
 import itertools
+import numpy as np
 from sympy import Matrix, linsolve
+from scipy.optimize import linprog
 from copy import copy
 from collections.abc import Iterable, Iterator
 from functools import cache
 
 
+# P1
+# -----------------------------------------------------------------------------
 def press_button_lights(buttons: list[int], presses: int) -> int:
     """Simulate button presses turning on/off lights by flipping bitmasks for each button.
     As presses are commutative, pressing any button more than once is equivalent to pressing it only once or not at all.
@@ -36,6 +40,10 @@ def press_button_lights(buttons: list[int], presses: int) -> int:
     return result
 
 
+# P2
+# -----------------------------------------------------------------------------
+# - Utility
+# -----------------------------------------------------------------------------
 @cache
 def get_button_press(button: int, out_len: int) -> list[int]:
     """Get the power state from pressing a button."""
@@ -84,6 +92,8 @@ def compare_joltage(buttons: list[int], presses: Iterable[int], expected: list[i
     return not is_underjolt, is_underjolt, out
 
 
+# - Depth-based combinatorics: Iterate all presses until we overshoot
+# -----------------------------------------------------------------------------
 def depth_press_search(buttons: list[int], joltage: list[int]) -> Iterator[tuple[bool, tuple[int, ...]]]:
     """Search through all possible presses depth first on each press.
     Upper limit of each buttons search range is derived from the joltage results.
@@ -110,12 +120,14 @@ def prune_depth_press_search(buttons: list[int], joltage: list[int]) -> list[lis
     button_max = [min([joltage[j] for j in get_button_indices(b)]) for b in buttons]
     print("Button combinations: ", button_max)
     results = []
-    solution_count = pruning_iterator(buttons, joltage, [0] * len(buttons), [range(value + 1) for value in button_max], results)
+    solution_count = pruning_iterator(buttons, joltage, [0] * len(buttons),
+                                      [range(value + 1) for value in button_max], results)
     print("Checked: ", solution_count, ", Pruned: ", max(joltage) ** len(buttons) - solution_count)
     return results
 
 
-def pruning_iterator(buttons: list[int], joltage: list[int], press: list[int], iterators: list[Iterable[int]], results: list[list[int]]) -> int:
+def pruning_iterator(buttons: list[int], joltage: list[int], press: list[int],
+                     iterators: list[Iterable[int]], results: list[list[int]]) -> int:
     """Generates test presses for each combination of iterator provided for each button.
     Invalid presses will prune generation of future presses in that chain.
     """
@@ -136,8 +148,14 @@ def pruning_iterator(buttons: list[int], joltage: list[int], press: list[int], i
     return checked_values
 
 
+# - Linear Equation solvers: Convert buttons into a linear system and solve for: buttons @ press = joltage
+# -----------------------------------------------------------------------------
 def button_solutions(buttons: list[int], joltage: list[int]) -> list[list[int]]:
-    """Try to solve problem using linear equation systems."""
+    """Try to solve problem using linear equation systems.
+    After attempts using scipy optimisation functions (leastsq, minimise) could not give integer solutions,
+    attempt to solve using sympy solvers.
+    But with multiple solutions it is hard to identify the minimum within valid bounds.
+    """
     A = [[] for _ in range(len(joltage))]
     for b in buttons:
         for i, ind in enumerate(get_button_press(b, len(joltage))):
@@ -151,14 +169,32 @@ def button_solutions(buttons: list[int], joltage: list[int]) -> list[list[int]]:
     for result in result_set:
         result = [i.subs([("tau0", -1), ("tau1", -1)]) for i in result]
         assert press_button_jolts(buttons, result, len(joltage)) == joltage
-        temp2 = sum(result)
         results.append(result)
-    temp = results
     return results
 
 
-def breadth_press_search(start_press: list[int], press_level: int, buttons: list[int], expected: list[int]) -> tuple[list[list[int]], int]:
-    """Takes a starting press value and generates branches which increment press values for this branch.
+def button_solutions2(buttons: list[int], joltage: list[int]) -> list[int]:
+    """Alternate attempt at linear equation solving which supports integer outputs.
+    Minimisation algorithm is better at arriving at a solution for underdetermined systems.
+    Using linprog gives better results for integer solutions than leastsq or minimise.
+    """
+    A = []
+    for b in buttons:
+        A.append(np.array(get_button_press(b, len(joltage))).reshape((-1, 1)))
+    A = np.concatenate(A, axis=1)
+    b = np.array(joltage)
+    c = np.ones(len(buttons))
+    result = linprog(c, A_eq=A, b_eq=b, bounds=(0,None), integrality=1, method="highs")
+    print(b, A @ result.x)
+    print(result.x, np.rint(result.x).astype(int).tolist())
+    return np.rint(result.x).astype(int).tolist()
+
+
+# - Breadth-based combinatorics: Generate all combinations of incrementing press at each level
+# -----------------------------------------------------------------------------
+def breadth_press_search(start_press: list[int], press_level: int,
+                         buttons: list[int], expected: list[int]) -> tuple[list[list[int]], int]:
+    """Takes a starting press value and generates all branches which increment press values for this branch.
     To avoid re-computing the same branches, only the press values for the current level are incremented.
     """
     # Exit condition
@@ -195,6 +231,8 @@ def breadth_press_search(start_press: list[int], press_level: int, buttons: list
             return valid_presses, solve_count
 
 
+# - Solution-based combinatorics: Iterate through all combinations of pressing buttons which can sum to joltage
+# -----------------------------------------------------------------------------
 @cache
 def part(n: int, maxsize: int, ind=1) -> list[list[int]]:
     """Generate all partitions for integer n."""
@@ -232,16 +270,17 @@ def prune_permutations_to_press(jolt: int, jolt_map: list[int],
             yield press
 
 
-def compute_valid_presses(buttons: list[int], expected: list[int]) -> Iterator[list[int]]:
+def solution_press_search(buttons: list[int], expected: list[int]) -> Iterator[list[int]]:
     """Generate the set of valid presses such that each joltage value is satisfied individually."""
-    solution_count = 0
+    # Build map of which buttons affect each joltage value
     jolt_map: list[list[int]] = [[] for _ in range(len(expected))]
     for i, b in enumerate(buttons):
         for ind in get_button_indices(b):
             jolt_map[ind].append(i)
 
-    # For each possible jolt output, generate a combination of buttons which matches it ('get_permutations_for_sum(jolt, len(buttons))')
+    # For each possible jolt output, generate a combination of buttons which matches it
     #   Then iterate over every combination of jolt combinations and see which ones can agree on a press array
+    solution_count = 0
     for press_sets in itertools.product(*[prune_permutations_to_press(jolt, button_ind, buttons, expected)
                                           for jolt, button_ind in zip(expected, jolt_map)]):
         # Generate net press by combining the press for each jolt combination
@@ -313,21 +352,31 @@ print(f"Day 10 Problem 1: {p1_count}")  # 491
 valid_presses_p2: list[list[list[int]]] = []
 for i, (result, buttons, joltage) in enumerate(machines):
     print(f"[{i+1}/{len(machines)}]\tSolving joltage: {joltage} from buttons: {buttons}")
+    press = button_solutions2(buttons, joltage)
+    valid_presses_p2.append([press])
+
+    match, underjolt, test = compare_joltage(buttons, press, joltage)
+    assert match, f"Computed press: {press} gave joltage: {test} instead of expected output: {joltage}"
+
+    """Solution-based search:
     valid_presses: list[list[int]] = []
-    for press in compute_valid_presses(buttons, joltage):
+    for press in solution_press_search(buttons, joltage):
         match, underjolt, test = compare_joltage(buttons, press, joltage)
         if match:
             valid_presses.append(press)
         pass
     valid_presses_p2.append(valid_presses)
+    """
 
-    '''solve_count: int
+    """Breadth-based search:
+    valid_presses: list[list[int]] = []
+    solve_count: int
     valid_presses, solve_count = breadth_press_search([0] * len(buttons), 0, buttons, joltage)
-    print("Checked: ", solve_count, ", Pruned: ", max(joltage) ** len(buttons) - solve_count)'''
+    print("Checked: ", solve_count, ", Pruned: ", max(joltage) ** len(buttons) - solve_count)
+    """
 
-
-
-    '''valid_presses: list[tuple[int, ...]] = []
+    """Depth-based search:
+    valid_presses: list[tuple[int, ...]] = []
     
     # Iterate over each combination of button presses
     result = prune_check_test_set(buttons, joltage)
@@ -337,7 +386,8 @@ for i, (result, buttons, joltage) in enumerate(machines):
         if match:
             valid_presses.append(press)
     print("Results: ", valid_presses)
-    valid_presses_p2.append(valid_presses)'''
+    valid_presses_p2.append(valid_presses)
+    """
 print(valid_presses_p2)
 
 p2_results = []
